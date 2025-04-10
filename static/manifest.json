@@ -4,7 +4,11 @@
 	"version": "1.0.0",
 	"description": "ZK with Garaga & SvelteKit",
 	"permissions": ["storage", "offscreen"],
-	"host_permissions": ["http://localhost:5173/*", "https://privacypoolsstaging.visoft.dev/*", "https://aztec-ignition.s3.amazonaws.com/*"],
+	"host_permissions": [
+		"http://localhost:5173/*",
+		"https://privacypoolsstaging.visoft.dev/*",
+		"https://aztec-ignition.s3.amazonaws.com/*"
+	],
 	"background": {
 		"service_worker": "background.js",
 		"type": "module"

@@ -115,11 +115,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 			const seedBigInt = BigInt(`0x${seedHex}`);
 
 			// Fetch all operations
-			const allOps = (await chrome.storage.local.get(['confirmedOperations', 'pendingOperations']));
+			const allOps = (await chrome.storage.local.get(['confirmedOperations', 'pendingOperations', 'nullifiedOperations', "abortedOperations"]));
 			const confirmed = allOps.confirmedOperations || [];
 			const pending = allOps.pendingOperations || [];
+			const nullified = allOps.nullifiedOperations || [];
+			const aborted = allOps.abortedOperations || [];
 
-			const index = confirmed.length + pending.length;
+
+
+			const index = confirmed.length + pending.length + nullified.length + aborted.length;
 			const id = crypto.randomUUID();
 
 			const secret = garagaInstance.poseidonHashBN254(
@@ -145,6 +149,41 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 			return;
 		}
 
+		if (msg.type === 'IMPORT_OPERATION') {
+			const { op } = msg;
+			const seedHex = (await chrome.storage.session.get(['decryptedSeed'])).decryptedSeed;
+
+			if (!seedHex) return sendResponse({ error: 'No seed unlocked' });
+
+			const garagaInstance = zkContext.garaga!;
+			const seedBigInt = BigInt(`0x${seedHex}`);
+
+			const allOps = (await chrome.storage.local.get(['confirmedOperations', 'pendingOperations', 'nullifiedOperations']));
+			const confirmed = allOps.confirmedOperations || [];
+			const pending = allOps.pendingOperations || [];
+			const nullified = allOps.nullifiedOperations || [];
+
+			const index = confirmed.length + pending.length + nullified.length;
+			const id = crypto.randomUUID();
+
+			const hash = garagaInstance.poseidonHashBN254(op.secret, op.nullifier);
+
+
+			const operation = {
+				id,
+				index,
+				secret: op.secret.toString(),
+				nullifier: op.nullifier.toString(),
+				hash: hash.toString(),
+				metadata: op.metadata
+			};
+
+			// Add to pending
+			await chrome.storage.local.set({ pendingOperations: [...pending, operation] });
+
+			sendResponse({ id, hash: operation.hash });
+			return;
+		}
 
 		if (msg.type === 'CONFIRM_OPERATION') {
 			const { id } = msg;
@@ -172,14 +211,33 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 		if (msg.type === 'ABORT_OPERATION') {
 			const { id } = msg;
 
-			const local = await chrome.storage.local.get(['pendingOperations']);
+			const local = await chrome.storage.local.get(['pendingOperations', 'abortedOperations']);
 			const pending = local.pendingOperations || [];
+			const aborted = local.abortedOperations || [];
 
 			const newPending = pending.filter((op: any) => op.id !== id);
 
-			await chrome.storage.local.set({ pendingOperations: newPending });
+			aborted.push(...pending.filter((op: any) => op.id === id));
+
+			await chrome.storage.local.set({ pendingOperations: newPending, abortedOperations: aborted });
 
 			sendResponse({ status: 'aborted' });
+			return;
+		}
+
+		if (msg.type === 'NULLIFY_OPERATION') {
+			const { id } = msg;
+
+			const local = await chrome.storage.local.get(['confirmedOperations', 'nullifiedOperations']);
+			const nullified = local.nullifiedOperations || [];
+			const confirmed = local.confirmedOperations || [];
+
+			const newConfirmed = confirmed.filter((op: any) => op.id !== id);
+			const newNullified = [...nullified, ...confirmed.filter((op: any) => op.id === id)];
+
+			await chrome.storage.local.set({ confirmedOperations: newConfirmed, nullifiedOperations: newNullified });
+
+			sendResponse({ status: 'nullified' });
 			return;
 		}
 
@@ -192,6 +250,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 				chrome.storage.local.get(['confirmedOperations'], (res) => {
 					sendResponse({
 						operations: res.confirmedOperations || []
+					});
+				});
+				return true;
+			});
+
+		}
+
+		if (msg.type === 'GET_PENDING_OPERATIONS') {
+			chrome.storage.session.get(['decryptedSeed'], (res) => {
+				const seedHex = res.decryptedSeed;
+				if (!seedHex) {
+					return sendResponse({ error: 'No seed unlocked' });
+				}
+				chrome.storage.local.get(['pendingOperations'], (res) => {
+					sendResponse({
+						operations: res.pendingOperations || []
 					});
 				});
 				return true;
