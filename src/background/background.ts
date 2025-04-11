@@ -158,12 +158,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 			const garagaInstance = zkContext.garaga!;
 			const seedBigInt = BigInt(`0x${seedHex}`);
 
-			const allOps = (await chrome.storage.local.get(['confirmedOperations', 'pendingOperations', 'nullifiedOperations']));
+			const allOps = (await chrome.storage.local.get(['confirmedOperations', 'pendingOperations', 'nullifiedOperations', "abortedOperations"]));
 			const confirmed = allOps.confirmedOperations || [];
 			const pending = allOps.pendingOperations || [];
 			const nullified = allOps.nullifiedOperations || [];
+			const aborted = allOps.abortedOperations || [];
 
-			const index = confirmed.length + pending.length + nullified.length;
+			const index = confirmed.length + pending.length + nullified.length + aborted.length;
 			const id = crypto.randomUUID();
 
 			const hash = garagaInstance.poseidonHashBN254(op.secret, op.nullifier);
@@ -273,34 +274,135 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 		}
 
-		// if (msg.type === 'GENERATE_PROOF') {
-		// 	await ensureOffscreenDocument();
-		// 	await waitForOffscreenReady();
+		if (msg.type === 'EXECUTE_TRANSACTION') {
+			const { body } = msg;
 
-		// 	const port = chrome.runtime.connect({ name: 'proof-channel' });
-		// 	const local = await chrome.storage.local.get(['pendingOperations', 'confirmedOperations']);
-		// 	const pending = local.pendingOperations || [];
-		// 	const confirmed = local.confirmedOperations || [];
+			try {
+				const executeTransactionResponse = await fetch(`https://privacypoolsstaging.visoft.dev/asp/executeAccountTransaction`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body
+				});
 
-		// 	port.postMessage({
-		// 		type: 'GENERATE_PROOF',
-		// 		circuit: msg.circuit,
-		// 		witnessInput: msg.witnessInput,
-		// 		confirmedOperations: confirmed,
-		// 		pendingOperations: pending,
-		// 	});
+				if (!executeTransactionResponse.ok) {
+					let fullMessage = 'Unknown error';
+					try {
+						const errorJson = await executeTransactionResponse.json();
+						const { code, message } = errorJson;
+						fullMessage = `[${code}] ${message}`;
+					} catch (parseError) {
+						fullMessage = 'Error while executing transaction.';
+					}
+					sendResponse({ error: fullMessage });
+					return;
+				}
 
-		// 	port.onMessage.addListener((response) => {
-		// 		if (response.type === 'PROOF_RESPONSE') {
-		// 			sendResponse({ proof: response.honkCalldataHex });
-		// 		} else if (response.type === 'PROOF_ERROR') {
-		// 			sendResponse({ error: response.error });
-		// 		}
-		// 	});
+				const txnData = await executeTransactionResponse.json();
+				const transactionHash = txnData.transaction_hash;
 
-		// 	return true;
-		// }
-		// GENERATE_PROOF: zapisujemy żądanie i otwieramy popup
+				sendResponse({ hash: transactionHash });
+			} catch (networkError) {
+				sendResponse({ error: 'Network error or backend unavailable.' });
+			}
+			return;
+		}
+
+		if (msg.type === 'GET_PROOF_DATA') {
+			const { body } = msg;
+
+			try {
+				const getProofDataResponse = await fetch(`https://privacypoolsstaging.visoft.dev/asp/getProofData`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body
+				});
+
+				if (!getProofDataResponse.ok) {
+					let message = 'Error while fetching proof data. Make sure the passed data is correct or try again later.'
+					sendResponse({ error: message });
+					return;
+				}
+
+				const proofData = await getProofDataResponse.json();
+				sendResponse({ data: proofData });
+			} catch (networkError) {
+				sendResponse({ error: 'Network error or backend unavailable.' });
+			}
+			return;
+		}
+
+		if (msg.type === 'GET_TRANSACTION_FEE_DATA') {
+			const { body } = msg;
+
+			try {
+				const feeResponse = await fetch(`https://privacypoolsstaging.visoft.dev/asp/getTransactionFee`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body
+				});
+
+				if (!feeResponse.ok) {
+					let message = 'Failed to fetch withdraw fee.'
+					sendResponse({ error: message });
+					return;
+				}
+
+				const feeData = await feeResponse.json();
+				sendResponse({ data: feeData });
+			} catch (networkError) {
+				sendResponse({ error: 'Network error or backend unavailable.' });
+			}
+			return;
+		}
+
+		if (msg.type === 'GET_TOKEN_DECIMALS') {
+			const { tokenAddress } = msg;
+
+			try {
+				const response = await fetch(`https://privacypoolsstaging.visoft.dev/asp/getTokenDecimals`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ token_address: tokenAddress })
+				});
+
+				if (!response.ok) {
+					let message = 'Failed to fetch token decimals.'
+					sendResponse({ error: message });
+					return;
+				}
+
+				const tokenDecimals = await response.json();
+				sendResponse({ data: tokenDecimals });
+			} catch (networkError) {
+				sendResponse({ error: 'Network error or backend unavailable.' });
+			}
+			return;
+		}
+
+		if (msg.type === 'GET_TOKEN_NAME') {
+			const { tokenAddress } = msg;
+
+			try {
+				const response = await fetch(`https://privacypoolsstaging.visoft.dev/asp/getTokenName`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ token_address: tokenAddress }),
+				});
+
+				if (!response.ok) {
+					let message = 'Failed to fetch token name.'
+					sendResponse({ error: message });
+					return;
+				}
+
+				const tokenName = await response.json();
+				sendResponse({ data: tokenName });
+			} catch (networkError) {
+				sendResponse({ error: 'Network error or backend unavailable.' });
+			}
+			return;
+		}
+
 		if (msg.type === 'GENERATE_PROOF') {
 			await ensureOffscreenDocument();
 			await waitForOffscreenReady();
@@ -356,7 +458,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 									pendingProofResponseCallback({ proof: response.honkCalldataHex });
 									pendingProofResponseCallback = null;
 								}
-								// Resetuj popup po zakończeniu operacji
 								chrome.action.setPopup({ popup: 'index.html' });
 							} else if (response.type === 'PROOF_ERROR') {
 								if (pendingProofResponseCallback) {
@@ -378,35 +479,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 			return true;
 		}
 
-		// if (msg.type === 'GENERATE_PROOF') {
-		// 	const requestId = crypto.randomUUID();
-
-		// 	const pending = {
-		// 		id: requestId,
-		// 		circuit: msg.circuit,
-		// 		witnessInput: msg.witnessInput
-		// 	};
-
-		// 	await chrome.storage.session.set({ pendingProofRequest: pending });
-
-		// 	console.log('[background] 📥 Stored pendingProofRequest in session');
-
-		// 	// ✅ Skonfiguruj popup jako approve-proof.html
-		// 	await chrome.action.setPopup({ popup: 'xd.html' });
-		// 	chrome.action.openPopup();
-
-		// 	// Poinformuj frontend, że popup został otwarty
-		// 	sendResponse({ status: 'waiting_for_approval', requestId });
-
-		// 	return true;
-		// }
-
-
-
 	})();
 
-
-	// ✅ Inform Chrome that we’ll respond asynchronously
 	return true;
 });
 
